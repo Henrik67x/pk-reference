@@ -4,11 +4,10 @@ from xgboost import XGBRegressor
 from sklearn.linear_model import Ridge
 from google import genai
 from difflib import get_close_matches
-import warnings
-warnings.filterwarnings('ignore')
-
 import os
 from dotenv import load_dotenv
+import warnings
+warnings.filterwarnings('ignore')
 
 load_dotenv()
 GEMINI_KEY = os.getenv("GEMINI_API_KEY")
@@ -37,9 +36,10 @@ TARGET_PKS = 'ga_per60'
 
 class PKEngine:
     def __init__(self, data_path="pk_final_dataset.csv", age_path="player_birthdates.csv",
-                 jersey_path="player_jersey_numbers.csv"):
+                 jersey_path="player_jersey_numbers.csv", raw_path="pk_merged.csv"):
         print("Initializing PK Engine...")
         self.df = pd.read_csv(data_path, dtype={'season': str})
+        self.raw_df = pd.read_csv(raw_path, dtype={'season': str})
         self.ages = pd.read_csv(age_path)
 
         try:
@@ -170,11 +170,9 @@ class PKEngine:
         return round(float(np.clip(score, -20, max_val)), 1)
 
     def find_player_matches(self, search_query):
-        """Handles case-insensitivity, typos, and jersey number disambiguation"""
         search_query = search_query.strip()
         all_players = sorted(self.df['player'].unique())
 
-        # Check for jersey number disambiguation (e.g. "Elias Pettersson 40")
         parts = search_query.rsplit(' ', 1)
         jersey_number = None
         name_query = search_query
@@ -183,10 +181,8 @@ class PKEngine:
             name_query = parts[0]
             jersey_number = int(parts[1])
 
-        # Exact case-insensitive match
         exact_matches = [p for p in all_players if p.lower() == name_query.lower()]
 
-        # If exact match(es) found and jersey number given, filter by number
         if exact_matches and jersey_number is not None:
             filtered = []
             for p in exact_matches:
@@ -199,9 +195,8 @@ class PKEngine:
         if exact_matches:
             return exact_matches
 
-        # Fuzzy match for typos (lowercase comparison for better matching)
         lower_map = {p.lower(): p for p in all_players}
-        close_lower = get_close_matches(name_query.lower(), list(lower_map.keys()), n=5, cutoff=0.7)
+        close_lower = get_close_matches(name_query.lower(), list(lower_map.keys()), n=5, cutoff=0.75)
         close = [lower_map[c] for c in close_lower]
 
         if close and jersey_number is not None:
@@ -219,6 +214,15 @@ class PKEngine:
         matches = self.find_player_matches(player_name)
 
         if not matches:
+            raw_check = self.raw_df[self.raw_df['player'].str.strip().str.lower() == player_name.strip().lower()]
+            if len(raw_check) > 0:
+                best_idx = raw_check['TOI'].idxmax()
+                best_toi = raw_check.loc[best_idx, 'TOI']
+                best_season = raw_check.loc[best_idx, 'season']
+                return {
+                    'error': f"Found {player_name}, but only {round(best_toi,1)} PK minutes in their best season ({best_season[:4]}-{best_season[4:]}) — too small a sample to score reliably (minimum 10 minutes required).",
+                    'suggestions': []
+                }
             return {'error': f"No player found matching '{player_name}'", 'suggestions': []}
 
         actual_name = matches[0]
@@ -254,12 +258,17 @@ class PKEngine:
         xPKS = self._normalize_score(raw_xpks, self._reference_xpks)
         PKS = self._normalize_score(raw_pks, self._reference_pks)
 
+        toi_val = round(row['TOI'], 1)
+        sample_warning = None
+        if toi_val < 40:
+            sample_warning = f"Small sample size — only {toi_val} PK minutes this season. Score may be unreliable and could shift significantly with more ice time."
+
         return {
             'player': row['player'],
             'team': row['team_clean'],
             'season': used_season,
             'season_is_fallback': used_season != season,
-            'TOI': round(row['TOI'], 1),
+            'TOI': toi_val,
             'position': row['position'],
             'xPKS': xPKS,
             'PKS': PKS,
@@ -270,7 +279,8 @@ class PKEngine:
             'pk_takeaways_per60': round(row['pk_takeaways_per60'], 2),
             'pk_giveaways_per60': round(row['pk_giveaways_per60'], 2),
             'sh_goals_per60': round(row['sh_goals_per60'], 2),
-            'other_matches': matches[1:] if len(matches) > 1 else []
+            'other_matches': matches[1:] if len(matches) > 1 else [],
+            'sample_warning': sample_warning,
         }
 
     def predict_next_season(self, player_name, current_season='20252026'):
@@ -328,9 +338,8 @@ Write the analysis now."""
 if __name__ == "__main__":
     engine = PKEngine()
 
-    print("\n--- Testing typo: 'Jacob Slavin' (should match Jaccob Slavin) ---")
-    print(engine.find_player_matches("Jacob Slavin"))
+    print("\n--- Testing: Patrick Kane (should show small sample message) ---")
+    print(engine.get_player_score("Patrick Kane", "20252026"))
 
-    print("\n--- Testing exact: 'Leo Carlsson' ---")
-    score = engine.get_player_score("Leo Carlsson", "20252026")
-    print(score)
+    print("\n--- Testing: Leo Carlsson ---")
+    print(engine.get_player_score("Leo Carlsson", "20252026"))
