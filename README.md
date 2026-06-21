@@ -14,7 +14,7 @@ Search any NHL player and get:
 - **xPKS (Expected Penalty Kill Score)** — a process-based score reflecting shot quality suppressed and individual actions taken, independent of whether the goalie made the save
 - **The gap between them** — when PKS is well below xPKS, the player's goaltending/teammates let him down. When PKS is well above xPKS, he was bailed out.
 
-Both scores are scaled so that **10 is league average**, **18–19 is an elite season**, and **negative scores indicate genuinely poor performance** — not just below average.
+Both scores are scaled so that **10 is league average**, **18–19 is an elite season**, and **negative scores indicate genuinely poor performance** not just below average.
 
 ## How the model works
 
